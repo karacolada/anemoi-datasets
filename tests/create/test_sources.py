@@ -657,3 +657,169 @@ def test_bufr(get_test_data: callable) -> None:
     dates = GroupOfDates(provider.values, provider)
 
     source.execute(dates)
+
+
+UKV_EXAMPLE_DATA_DIR = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), "..", "..", "..", "example_data")
+)
+
+
+@pytest.mark.skipif(not os.path.isdir(UKV_EXAMPLE_DATA_DIR), reason="UKV example data not available")
+def test_ukv_trajectory_grib() -> None:
+    """Load one UKV trajectory GRIB basetime through the ``grib`` source.
+
+    The test is intentionally lightweight: it loads a single basetime, three
+    steps, and a single parameter, and only inspects field metadata.
+    """
+    from collections import Counter
+
+    from anemoi.datasets.create.input.builder import InputBuilder
+    from anemoi.datasets.create.input.context import Context
+    from anemoi.datasets.create.recipe import Recipe
+    from anemoi.datasets.create.sources.ukv import UKV_FLAVOUR
+
+    class TestContext(Context):
+        def create_result(self, argument: Any, data: Any) -> Any:
+            return data
+
+    recipe = Recipe(
+        **{
+            "base_dates": {
+                "start": "2026-01-08T00:00:00",
+                "end": "2026-01-08T00:00:00",
+                "frequency": "3h",
+            },
+            "input": {
+                "grib": {
+                    "path": os.path.join(
+                        UKV_EXAMPLE_DATA_DIR,
+                        "{date:strftime(%Y%m%d%H%M)}_u1096_ng_umqv_Wholesale{wholesale}.grib",
+                    ),
+                    "wholesale": [1, 2],
+                    "param": ["temperature"],
+                    "flavour": UKV_FLAVOUR,
+                    "grid_definition": {"transverse_mercator": {}},
+                }
+            },
+            "output": {"layout": "trajectories"},
+            "steps": {"start": "0h", "end": "6h", "frequency": "3h"},
+        }
+    )
+
+    builder = InputBuilder(recipe.input, recipe.data_sources)
+    group = next(iter(recipe.make_groups()))
+    ds = builder.select(TestContext(recipe), group)
+
+    assert len(ds) > 0
+
+    steps = {int(f.metadata("step")) for f in ds}
+    dates = {int(f.metadata("date")) for f in ds}
+    times = {int(f.metadata("time") or 0) for f in ds}
+    params = {f.metadata("param") for f in ds}
+
+    assert steps == {0, 3, 6}
+    assert dates == {20260108}
+    assert times == {0}
+    assert params == {"temperature"}
+
+    by_step: dict[int, Counter] = {}
+    for f in ds:
+        step = int(f.metadata("step"))
+        # Some fields (e.g. ``temperature`` at ``heightAboveGround`` level 0)
+        # carry no ``levelist``; fall back to ``level``, then ``None``,
+        # mirroring the soil-mapping pattern.
+        by_step.setdefault(step, Counter())[
+            (f.metadata("param"), str(f.metadata("levelist", default=f.metadata("level", default=None))))
+        ] += 1
+
+    assert set(by_step) == {0, 3, 6}
+    assert all(sum(by_step[step].values()) > 0 for step in (0, 3, 6))
+
+
+@pytest.mark.skipif(not os.path.isdir(UKV_EXAMPLE_DATA_DIR), reason="UKV example data not available")
+def test_ukv_trajectory_full_build() -> None:
+    """Build a full UKV trajectory dataset from all four Wholesale files.
+
+    The recipe requests thirteen parameters spanning Wholesale 1, 2, 3, and 5.
+    This exercises the complete parameter mapping in
+    :mod:`anemoi.datasets.create.sources.ukv`, including the disambiguation
+    of the two ``vis`` products: the one with
+    ``productDefinitionTemplateNumber`` 0 maps to ``visibility`` while the
+    one with template 5 is intentionally left unmapped and excluded, so the
+    resulting dataset must contain exactly one visibility variable.
+    """
+    from anemoi.datasets.create.sources.ukv import UKV_FLAVOUR
+
+    recipe = {
+        "base_dates": {
+            "start": "2026-01-08T00:00:00",
+            "end": "2026-01-08T00:00:00",
+            "frequency": "3h",
+        },
+        "input": {
+            "grib": {
+                "path": os.path.join(
+                    UKV_EXAMPLE_DATA_DIR,
+                    "{date:strftime(%Y%m%d%H%M)}_u1096_ng_umqv_Wholesale{wholesale}.grib",
+                ),
+                "wholesale": [1, 2, 3, 5],
+                "param": [
+                    "temperature",
+                    "geopotential_height",
+                    "wind_speed",
+                    "wind_direction",
+                    "pressure_reduced_to_mean_sea_level",
+                    "relative_humidity",
+                    "dewpoint_temperature",
+                    "precipitation_rate",
+                    "visibility",
+                    "wind_speed_10m",
+                    "wind_direction_10m",
+                    "snow_depth",
+                    "surface_downwelling_shortwave_flux",
+                ],
+                "flavour": UKV_FLAVOUR,
+                "grid_definition": {"transverse_mercator": {}},
+            }
+        },
+        "output": {"layout": "trajectories"},
+        "steps": {"start": "0h", "end": "6h", "frequency": "3h"},
+        # A single basetime is shorter than the default statistics window, so
+        # an explicit envelope covering the whole trajectory is required.
+        "statistics": {"start": "2026-01-08T00:00:00", "end": "2026-01-08T06:00:00"},
+    }
+
+    path = create_dataset(recipe=recipe, output=None)
+
+    ds = open_dataset(path)
+    variables = ds.variables
+
+    # The surface ``vis`` product carries ``levelist`` 1, hence ``visibility_1``.
+    visibility_vars = [v for v in variables if v.startswith("visibility")]
+    assert visibility_vars == ["visibility_1"]
+
+    # Every requested parameter must be present, with no duplicates.
+    expected = {
+        "dewpoint_temperature_1",
+        "geopotential_height_850",
+        "geopotential_height_1000",
+        "precipitation_rate",
+        "pressure_reduced_to_mean_sea_level",
+        "relative_humidity_1",
+        "relative_humidity_850",
+        "snow_depth",
+        "surface_downwelling_shortwave_flux",
+        "temperature",
+        "temperature_1",
+        "temperature_850",
+        "visibility_1",
+        "wind_direction_10m",
+        "wind_speed_10m",
+        "wind_speed_850",
+        "wind_speed_1000",
+    }
+    assert expected.issubset(set(variables))
+    assert len(variables) == len(set(variables))
+
+    # 1 base date, 86 variables, 1 ensemble, 3 steps, 385792 grid cells.
+    assert ds.shape == (1, 86, 1, 3, 385792)

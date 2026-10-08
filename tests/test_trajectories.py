@@ -21,6 +21,7 @@ Covers:
 """
 
 import datetime
+from unittest.mock import MagicMock
 from unittest.mock import patch
 
 import numpy as np
@@ -874,3 +875,206 @@ class TestTrajectoriesSelect:
         outer = open_dataset(inner, drop="a")
         assert outer.variables == ["c"]
         np.testing.assert_array_equal(outer[0], self.data[0][[2]])
+
+
+# ---------------------------------------------------------------------------
+# GribSource forecast / trajectory helpers
+# ---------------------------------------------------------------------------
+
+
+class TestGribSourceStepHours:
+    def test_int_hours(self):
+        from anemoi.datasets.create.sources.grib import _step_hours
+
+        assert _step_hours(0) == 0
+        assert _step_hours(6) == 6
+        assert _step_hours(36) == 36
+
+    def test_strings(self):
+        from anemoi.datasets.create.sources.grib import _step_hours
+
+        assert _step_hours("0m") == 0
+        assert _step_hours("6") == 6
+        assert _step_hours("36h") == 36
+
+    def test_timedelta(self):
+        from anemoi.datasets.create.sources.grib import _step_hours
+
+        assert _step_hours(datetime.timedelta(hours=0)) == 0
+        assert _step_hours(datetime.timedelta(hours=12)) == 12
+
+    def test_non_whole_hour_raises(self):
+        from anemoi.datasets.create.sources.grib import _step_hours
+
+        with pytest.raises(ValueError, match="whole-hour step"):
+            _step_hours(datetime.timedelta(minutes=30))
+
+
+class TestGribSourcePathParams:
+    def _make_source(self, path, **kwargs):
+        from anemoi.datasets.create.sources.grib import GribSource
+
+        return GribSource(MagicMock(), path=path, **kwargs)
+
+    def test_no_template_variables(self):
+        source = self._make_source("/some/path/file.grib")
+        assert source._path_params() == set()
+
+    def test_date_template(self):
+        source = self._make_source("/some/path/{date:strftime(%Y%m%d)}.grib")
+        assert source._path_params() == {"date"}
+
+    def test_ukv_path_template(self):
+        source = self._make_source(
+            "/some/path/{date:strftime(%Y%m%d%H%M)}_u1096_ng_umqv_Wholesale{wholesale}.grib"
+        )
+        assert source._path_params() == {"date", "wholesale"}
+
+    def test_multiple_paths_union(self):
+        source = self._make_source(
+            [
+                "/some/path/{date:strftime(%Y%m%d)}.grib",
+                "/other/path/{date:strftime(%Y%m%d)}_Wholesale{wholesale}.grib",
+            ]
+        )
+        assert source._path_params() == {"date", "wholesale"}
+
+
+class TestGribSourceRequestedKeys:
+    def _make_source(self):
+        from anemoi.datasets.create.sources.grib import GribSource
+
+        return GribSource(MagicMock(), path="unused")
+
+    def test_keys_and_basetimes(self):
+        from anemoi.datasets.create.arguments import ForecastDates
+
+        base1 = datetime.datetime(2026, 1, 8, 0)
+        base2 = datetime.datetime(2026, 1, 8, 3)
+        dates = ForecastDates(
+            [
+                (base1, base1),
+                (base1 + datetime.timedelta(hours=6), base1),
+                (base1 + datetime.timedelta(hours=12), base1),
+                (base2, base2),
+            ]
+        )
+
+        keys, basetimes = self._make_source()._requested_keys(dates)
+
+        assert keys == {
+            ("20260108", 0, 0),
+            ("20260108", 0, 6),
+            ("20260108", 0, 12),
+            ("20260108", 300, 0),
+        }
+        assert basetimes == [base1, base2]
+
+
+class TestGribSourceResolvePaths:
+    def _make_source(self, path, **kwargs):
+        from anemoi.datasets.create.sources.grib import GribSource
+
+        return GribSource(MagicMock(), path=path, **kwargs)
+
+    def test_template_expands_per_basetime_and_list_kwargs(self, tmp_path):
+        template = str(tmp_path) + "/{date:strftime(%Y%m%d%H%M)}_Wholesale{wholesale}.grib"
+        source = self._make_source(path=template, wholesale=[1, 2])
+
+        paths = source._resolve_paths(
+            [datetime.datetime(2026, 1, 8, 0), datetime.datetime(2026, 1, 8, 3)]
+        )
+
+        prefix = str(tmp_path)
+        assert paths == [
+            f"{prefix}/202601080000_Wholesale1.grib",
+            f"{prefix}/202601080000_Wholesale2.grib",
+            f"{prefix}/202601080300_Wholesale1.grib",
+            f"{prefix}/202601080300_Wholesale2.grib",
+        ]
+
+    def test_plain_path_returned_unchanged(self):
+        source = self._make_source(path="/some/path/file.grib")
+
+        paths = source._resolve_paths([datetime.datetime(2026, 1, 8, 0)])
+
+        assert paths == ["/some/path/file.grib"]
+
+    def test_duplicate_templates_are_deduplicated(self, tmp_path):
+        template = str(tmp_path) + "/{date:strftime(%Y%m%d)}_Wholesale{wholesale}.grib"
+        source = self._make_source(path=[template, template], wholesale=[1])
+
+        paths = source._resolve_paths([datetime.datetime(2026, 1, 8, 0)])
+
+        assert len(paths) == 1
+
+    def test_selection_list_kwargs_do_not_change_resolved_paths(self, tmp_path):
+        template = str(tmp_path) + "/{date:strftime(%Y%m%d%H%M)}_Wholesale{wholesale}.grib"
+        source = self._make_source(path=template, wholesale=[1], param=["temperature", "u"])
+
+        paths = source._resolve_paths([datetime.datetime(2026, 1, 8, 0)])
+
+        assert paths == [f"{tmp_path}/202601080000_Wholesale1.grib"]
+
+
+class TestGribSourceForecastDates:
+    def _make_source(self, path, **kwargs):
+        from anemoi.datasets.create.sources.grib import GribSource
+
+        return GribSource(MagicMock(), path=path, **kwargs)
+
+    def test_mars_interpolation_parameter_raises(self):
+        from anemoi.datasets.create.arguments import ForecastDates
+
+        base = datetime.datetime(2026, 1, 8, 0)
+        source = self._make_source(path="unused", area="uk")
+
+        with pytest.raises(ValueError, match="MARS interpolation parameter 'area'"):
+            source.execute_forecast_dates(ForecastDates([(base, base)]))
+
+    def test_missing_file_raises(self, tmp_path):
+        from anemoi.datasets.create.arguments import ForecastDates
+
+        base = datetime.datetime(2026, 1, 8, 0)
+        source = self._make_source(path=str(tmp_path / "missing.grib"))
+
+        with pytest.raises(FileNotFoundError, match="missing.grib"):
+            source.execute_forecast_dates(ForecastDates([(base, base)]))
+
+    def test_dynamic_path_params_are_not_forwarded_to_sel_and_step_is_normalised(
+        self,
+        tmp_path,
+    ):
+        from anemoi.datasets.create.arguments import ForecastDates
+
+        base = datetime.datetime(2026, 1, 8, 0)
+        template = str(tmp_path) + "/{date:strftime(%Y%m%d%H%M)}_Wholesale{wholesale}.grib"
+        resolved = tmp_path / "202601080000_Wholesale1.grib"
+        resolved.write_text("fake")
+
+        source = self._make_source(path=template, wholesale=[1], param=["temperature"])
+
+        fake_field = MagicMock()
+        fake_field.metadata.side_effect = lambda key: {"date": 20260108, "time": 0, "step": "0m"}[key]
+        fake_source = MagicMock()
+        fake_source.__iter__.return_value = iter([fake_field])
+        fake_source.sel.return_value = fake_source
+
+        with patch(
+            "anemoi.datasets.create.sources.grib.from_source",
+            return_value=fake_source,
+        ) as mock_from_source, patch(
+            "anemoi.datasets.create.sources.grib.new_field_with_metadata",
+            side_effect=lambda field, step: (field, step),
+        ) as mock_new_field_with_metadata, patch(
+            "anemoi.datasets.create.sources.grib.new_fieldlist_from_list",
+            side_effect=lambda fields: fields,
+        ):
+            ds = source.execute_forecast_dates(ForecastDates([(base, base)]))
+
+        mock_from_source.assert_called_once()
+        fake_source.sel.assert_called_once_with(param=["temperature"])
+        mock_new_field_with_metadata.assert_called_once_with(fake_field, step=0)
+        assert len(ds) == 1
+        assert ds[0][0] is fake_field
+        assert ds[0][1] == 0
