@@ -35,6 +35,7 @@ import tqdm
 from anemoi.datasets.buffering import WriteBehindBuffer
 from anemoi.datasets.compat import blosc_compressor
 from anemoi.datasets.compat import get_zarr_format
+from anemoi.datasets.create.parts import part_bounds
 from anemoi.datasets.create.statistics import StatisticsCollector
 from anemoi.datasets.date_indexing import create_date_indexing
 from anemoi.datasets.epochs import array_to_epoch
@@ -89,9 +90,9 @@ class Fragment:
         self._shape: tuple[int, ...] = shape
         self._offset: int | None = None
 
-        assert (
-            self.first_date <= self.last_date
-        ), f"Fragment {file_path} has invalid date range: {self.first_date} to {self.last_date}"
+        assert self.first_date <= self.last_date, (
+            f"Fragment {file_path} has invalid date range: {self.first_date} to {self.last_date}"
+        )
 
     @property
     def file_path(self) -> str:
@@ -127,9 +128,9 @@ class Fragment:
         value : int
             The offset value to set.
         """
-        assert (
-            self._offset is None
-        ), f"Offset for fragment {self.file_path} is already set to {self._offset}, cannot overwrite with {value}"
+        assert self._offset is None, (
+            f"Offset for fragment {self.file_path} is already set to {self._offset}, cannot overwrite with {value}"
+        )
         self._offset = value
 
     @classmethod
@@ -747,12 +748,12 @@ def _load_fragment_worker(fragment: Fragment) -> tuple[Fragment, np.ndarray]:
         first = _date(array, 0)
         last = _date(array, -1)
 
-        assert (
-            first == fragment.first_date
-        ), f"First date {first} does not match fragment first date {fragment.first_date} for file {fragment.file_path}"
-        assert (
-            last == fragment.last_date
-        ), f"Last date {last} does not match fragment last date {fragment.last_date} for file {fragment.file_path}"
+        assert first == fragment.first_date, (
+            f"First date {first} does not match fragment first date {fragment.first_date} for file {fragment.file_path}"
+        )
+        assert last == fragment.last_date, (
+            f"Last date {last} does not match fragment last date {fragment.last_date} for file {fragment.file_path}"
+        )
 
         return (fragment, array, time.time() - now)
     except Exception:
@@ -852,29 +853,6 @@ def _daily_epochs(first_date: datetime.datetime, last_date: datetime.datetime) -
         epochs.append(date)
         date += datetime.timedelta(days=1)
     return np.array(epochs, dtype="datetime64[s]")
-
-
-def _part_bounds(parts: str | list | None, total: int) -> tuple[int, int, int]:
-    """Return ``(part_index, lo, hi)`` for the contiguous slice ``[lo, hi)`` of ``[0, total)``.
-
-    Mirrors :class:`~anemoi.datasets.create.parts.PartFilter`'s 1-based ``i/n`` contiguous split.
-    Used to divide the zarr **chunks** among ``--load`` calls (``total`` = number of chunks): the
-    bounds are derived from ``total`` so that empty parts (``n`` larger than ``total``) still yield
-    ``lo == hi`` at the correct boundary, keeping the per-part statistics contiguous for ``tidy``.
-    """
-    if isinstance(parts, list):
-        if len(parts) != 1:
-            raise ValueError(f"Invalid parts format: {parts}. Must be a single 'i/n'.")
-        parts = parts[0]
-
-    if not parts or parts in ("all", "*"):
-        return 0, 0, total
-
-    i, n = (int(x) for x in parts.split("/"))
-    chunk_size = total / n
-    lo = sum(1 for x in range(total) if x < (i - 1) * chunk_size)
-    hi = sum(1 for x in range(total) if x < i * chunk_size)
-    return i - 1, lo, hi
 
 
 def _write_part_into_zarr(
@@ -1296,9 +1274,9 @@ def compute_rows_per_chunk(
         f"compression x{compression_ratio:g}). Density from {density_source}."
     )
     LOG.info(
-        f"Filesystem read sweet spot {fs_read_min_bytes>>20}-{fs_read_max_bytes>>20} MB on disk "
+        f"Filesystem read sweet spot {fs_read_min_bytes >> 20}-{fs_read_max_bytes >> 20} MB on disk "
         f"= {fs_min_rows:,}-{fs_max_rows:,} rows/chunk; "
-        f"latency {fs_latency_seconds*1e3:g} ms, bandwidth {fs_bandwidth_bytes_per_s/1e9:g} GB/s."
+        f"latency {fs_latency_seconds * 1e3:g} ms, bandwidth {fs_bandwidth_bytes_per_s / 1e9:g} GB/s."
     )
 
     def on_disk_mb(chunk_rows: int) -> float:
@@ -1405,8 +1383,8 @@ def load_tabular_dataset(
     chunk_rows = manifest["chunking"][0]
     nchunks = (nrows + chunk_rows - 1) // chunk_rows
 
-    part_index, chunk_lo, chunk_hi = _part_bounds(parts, nchunks)
-    row_lo = chunk_lo * chunk_rows
+    part_index, chunk_lo, chunk_hi = part_bounds(parts, nchunks)
+    row_lo = min(chunk_lo * chunk_rows, nrows)
     row_hi = min(chunk_hi * chunk_rows, nrows)
 
     # Fragments overlapping this part's row range. A fragment fully inside the range is read only

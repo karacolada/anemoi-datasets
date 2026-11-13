@@ -124,7 +124,6 @@ def open_trajectories_zarr(group: zarr.Group):
 
 
 class TestTrajectoriesOutputChunking:
-
     def _make_output(self, chunking=None):
         from anemoi.datasets.create.recipe.output import TrajectoriesOutput
 
@@ -171,7 +170,6 @@ class TestTrajectoriesOutputChunking:
 
 
 class TestRecipeStepsValidator:
-
     def _gridded_recipe(self):
         return {
             "dates": {"start": "2021-01-01", "end": "2021-01-02", "frequency": "6h"},
@@ -256,7 +254,6 @@ class TestRecipeStepsValidator:
 
 
 class TestSteps:
-
     def _make_steps(self, start="6h", end="24h", frequency="6h"):
         from anemoi.datasets.create.trajectories.context import Steps
 
@@ -288,7 +285,6 @@ class TestSteps:
 
 
 class TestTrajectoriesZarr:
-
     def setup_method(self):
         self.group = make_trajectories_zarr(n_dates=4, n_steps=5, n_vars=3, n_cells=10)
         self.ds = open_trajectories_zarr(self.group)
@@ -372,7 +368,6 @@ class TestTrajectoriesZarr:
 
 
 class TestStepSubset:
-
     def setup_method(self):
         self.group = make_trajectories_zarr(n_dates=4, n_steps=5, n_vars=3, n_cells=10)
         self.ds = open_trajectories_zarr(self.group)
@@ -442,7 +437,6 @@ class TestStepSubset:
 
 
 class TestSingleStepView:
-
     def setup_method(self):
         self.group = make_trajectories_zarr(n_dates=4, n_steps=5, n_vars=3, n_cells=10)
         self.ds = open_trajectories_zarr(self.group)
@@ -480,7 +474,6 @@ class TestSingleStepView:
 
 
 class TestStepToIndex:
-
     def setup_method(self):
         self.group = make_trajectories_zarr(n_dates=4, n_steps=5, n_vars=3, n_cells=10)
         self.ds = open_trajectories_zarr(self.group)
@@ -510,7 +503,6 @@ class TestStepToIndex:
 
 
 class TestOpenDatasetStepSelection:
-
     def setup_method(self):
         self.group = make_trajectories_zarr(n_dates=4, n_steps=5, n_vars=3, n_cells=10)
 
@@ -543,7 +535,6 @@ class TestOpenDatasetStepSelection:
 
 
 class TestExpandToBy:
-
     def _expand(self, x):
         from anemoi.datasets.create.sources.mars.retrieval import expand_to_by
 

@@ -275,8 +275,8 @@ class Version:
             print(f"📅 Date start : {_fmt(self.dataset.start_date)}")
             print(f"📅 Date end   : {_fmt(self.dataset.end_date)}")
         else:
-            print(f'📅 Date      start: {self.first_date.strftime("%Y-%m-%d %H:%M")}')
-            print(f'📅 Date      end  : {self.last_date.strftime("%Y-%m-%d %H:%M")}')
+            print(f"📅 Date      start: {self.first_date.strftime('%Y-%m-%d %H:%M')}")
+            print(f"📅 Date      end  : {self.last_date.strftime('%Y-%m-%d %H:%M')}")
             print(f"⏰ Frequency  : {self.frequency}")
         if self.n_missing_dates is not None:
             print(f"🚫 Missing    : {self.n_missing_dates:,}")
@@ -468,7 +468,8 @@ class Version:
 
         build_flags = np.array([], dtype=bool) if self.build_flags is None else self.build_flags
 
-        build_lengths = np.array([], dtype=bool) if self.build_lengths is None else self.build_lengths
+        # Datasets without per-group lengths: each group counts as one unit of progress.
+        build_lengths = np.ones(build_flags.size, dtype=int) if self.build_lengths is None else self.build_lengths
         assert build_flags.size == build_lengths.size
 
         latest_write_timestamp = self.zarr.attrs.get("latest_write_timestamp")

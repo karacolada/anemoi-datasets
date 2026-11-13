@@ -51,7 +51,7 @@ def task(what: str, options: dict, *args: Any, **kwargs: Any) -> Any:
 
     result = run_task(what.replace("-", "_"), **options, **kwargs)
 
-    LOG.info(f"🏁 Task {what}({args},{kwargs}) completed ({datetime.datetime.now()-now})")
+    LOG.info(f"🏁 Task {what}({args},{kwargs}) completed ({datetime.datetime.now() - now})")
     return result
 
 
@@ -100,7 +100,7 @@ class Create(Command):
             self.parallel_create(args)
         else:
             self.serial_create(args)
-        LOG.info(f"Create completed in {seconds_to_human(time.time()-now)}")
+        LOG.info(f"Create completed in {seconds_to_human(time.time() - now)}")
 
     def serial_create(self, args: Any) -> None:
         """Create the dataset in serial mode.
@@ -118,10 +118,6 @@ class Create(Command):
         task("init", options)
         task("load", options)
         task("finalise", options)
-
-        task("init_additions", options)
-        task("load_additions", options)
-        task("finalise_additions", options)
 
         task("patch", options)
 
@@ -165,7 +161,7 @@ class Create(Command):
         with ExecutorClass(max_workers=parallel) as executor:
             for n in range(total):
                 opt = options.copy()
-                opt["parts"] = f"{n+1}/{total}"
+                opt["parts"] = f"{n + 1}/{total}"
                 futures.append(executor.submit(task, "load", opt))
 
             for future in tqdm.tqdm(
@@ -173,21 +169,20 @@ class Create(Command):
             ):
                 future.result()
 
+        # Staged finalise: the statistics are computed in parallel over contiguous row ranges,
+        # then merged by the tidy stage.
         with ExecutorClass(max_workers=1) as executor:
-            executor.submit(task, "finalise", options).result()
+            executor.submit(task, "finalise", dict(options, finalise_stage="prepare")).result()
 
-        with ExecutorClass(max_workers=1) as executor:
-            executor.submit(task, "init-additions", options).result()
-
+        futures = []
         with ExecutorClass(max_workers=parallel) as executor:
-            for n in range(total):
-                opt = options.copy()
-                opt["parts"] = f"{n+1}/{total}"
-                futures.append(executor.submit(task, "load-additions", opt))
+            for n in range(parallel):
+                opt = dict(options, finalise_stage="load", parts=f"{n + 1}/{parallel}")
+                futures.append(executor.submit(task, "finalise", opt))
 
             for future in tqdm.tqdm(
                 as_completed(futures),
-                desc="Computing additions",
+                desc="Computing statistics",
                 total=len(futures),
                 colour="green",
                 position=parallel + 1,
@@ -195,7 +190,7 @@ class Create(Command):
                 future.result()
 
         with ExecutorClass(max_workers=1) as executor:
-            executor.submit(task, "finalise-additions", options).result()
+            executor.submit(task, "finalise", dict(options, finalise_stage="tidy")).result()
             executor.submit(task, "patch", options).result()
             executor.submit(task, "cleanup", options).result()
             executor.submit(task, "verify", options).result()

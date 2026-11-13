@@ -129,7 +129,6 @@ def _step_hours(step: Any) -> int:
 
 @source_registry.register("grib")
 class GribSource(Source):
-
     def __init__(
         self,
         context: Any,
@@ -183,7 +182,6 @@ class GribSource(Source):
         dates = [d.isoformat() for d in dates]
 
         for path in given_paths:
-
             # do not substitute if not needed
             if "{" not in path:
                 paths = [path]
